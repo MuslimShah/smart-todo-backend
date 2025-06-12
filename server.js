@@ -2,12 +2,15 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const morgan = require("morgan");
+const jwt = require("jsonwebtoken");
+const bcrypt = require("bcrypt");
 const { v4: uuidv4 } = require("uuid");
 require("dotenv").config();
 
 // Initialize app
 const app = express();
 const PORT = process.env.PORT || 5000;
+const SECRET = process.env.JWT_SECRET || "your_secret_key";
 
 // Middleware
 app.use(express.json());
@@ -24,8 +27,14 @@ mongoose
   .catch((err) => console.error("MongoDB connection error:", err));
 
 // Models
+const userSchema = new mongoose.Schema({
+  username: { type: String, unique: true, required: true },
+  password: { type: String, required: true },
+});
+
 const todoSchema = new mongoose.Schema({
   id: { type: String, default: uuidv4 },
+  userId: { type: String, required: true }, // Link task to user
   title: { type: String, required: true },
   description: { type: String },
   completed: { type: Boolean, default: false },
@@ -44,41 +53,76 @@ const todoSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now },
 });
 
+const User = mongoose.model("User", userSchema);
 const Todo = mongoose.model("Todo", todoSchema);
 
+// Authentication middleware
+const authenticate = (req, res, next) => {
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
+
+  jwt.verify(token, SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: "Invalid token" });
+    req.user = user;
+    next();
+  });
+};
+
 // Routes
-app.get("/api/health", (req, res) => {
-  res.status(200).json({ status: "ok", message: "Backend is running" });
+app.post("/api/register", async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newUser = new User({ username, password: hashedPassword });
+    await newUser.save();
+
+    res.status(201).json({ message: "User registered successfully" });
+  } catch (err) {
+    res
+      .status(400)
+      .json({ error: "Error registering user", details: err.message });
+  }
 });
 
-app.get("/api/todos", async (req, res) => {
+app.post("/api/login", async (req, res) => {
   try {
-    const { category, priority, completed, search } = req.query;
-    let filter = {};
+    const { username, password } = req.body;
 
-    if (category) filter.category = category;
-    if (priority) filter.priority = priority;
-    if (completed !== undefined) filter.completed = completed === "true";
-    if (search)
-      filter.$or = [
-        { title: new RegExp(search, "i") },
-        { description: new RegExp(search, "i") },
-        { tags: new RegExp(search, "i") },
-      ];
+    const user = await User.findOne({ username });
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      return res.status(400).json({ error: "Invalid credentials" });
+    }
 
-    const todos = await Todo.find(filter).sort({ createdAt: -1 });
+    const token = jwt.sign({ id: user._id, username: user.username }, SECRET, {
+      expiresIn: "1h",
+    });
+
+    res.status(200).json({ token });
+  } catch (err) {
+    res.status(500).json({ error: "Error logging in", details: err.message });
+  }
+});
+
+// Protect routes with `authenticate` middleware
+app.get("/api/todos", authenticate, async (req, res) => {
+  try {
+    const todos = await Todo.find({ userId: req.user.id }).sort({
+      createdAt: -1,
+    });
     res.status(200).json(todos);
   } catch (err) {
     res.status(500).json({ error: "Server error", details: err.message });
   }
 });
 
-app.post("/api/todos", async (req, res) => {
+app.post("/api/todos", authenticate, async (req, res) => {
   try {
     const { title, description, priority, category, tags, dueDate, subtasks } =
       req.body;
 
     const newTodo = new Todo({
+      userId: req.user.id, // Assign task to authenticated user
       title,
       description,
       priority,
@@ -95,11 +139,11 @@ app.post("/api/todos", async (req, res) => {
   }
 });
 
-app.put("/api/todos/:id", async (req, res) => {
+app.put("/api/todos/:id", authenticate, async (req, res) => {
   try {
     const updatedData = { ...req.body, updatedAt: Date.now() };
     const updatedTodo = await Todo.findOneAndUpdate(
-      { id: req.params.id },
+      { id: req.params.id, userId: req.user.id }, // Ensure task belongs to user
       updatedData,
       { new: true }
     );
@@ -112,50 +156,18 @@ app.put("/api/todos/:id", async (req, res) => {
   }
 });
 
-app.delete("/api/todos/:id", async (req, res) => {
+app.delete("/api/todos/:id", authenticate, async (req, res) => {
   try {
-    const deletedTodo = await Todo.findOneAndDelete({ id: req.params.id });
+    const deletedTodo = await Todo.findOneAndDelete({
+      id: req.params.id,
+      userId: req.user.id, // Ensure task belongs to user
+    });
 
     if (!deletedTodo) return res.status(404).json({ error: "Todo not found" });
 
     res.status(200).json({ message: "Todo deleted successfully" });
   } catch (err) {
     res.status(500).json({ error: "Server error", details: err.message });
-  }
-});
-
-app.patch("/api/todos/:id/toggle", async (req, res) => {
-  try {
-    const todo = await Todo.findOne({ id: req.params.id });
-
-    if (!todo) return res.status(404).json({ error: "Todo not found" });
-
-    todo.completed = !todo.completed;
-    todo.updatedAt = Date.now();
-    await todo.save();
-
-    res.status(200).json(todo);
-  } catch (err) {
-    res.status(500).json({ error: "Server error", details: err.message });
-  }
-});
-
-app.put("/api/todos/:id/subtasks/:subtaskId", async (req, res) => {
-  try {
-    const todo = await Todo.findOne({ id: req.params.id });
-
-    if (!todo) return res.status(404).json({ error: "Todo not found" });
-
-    const subtask = todo.subtasks.find((st) => st.id === req.params.subtaskId);
-    if (!subtask) return res.status(404).json({ error: "Subtask not found" });
-
-    Object.assign(subtask, req.body);
-    todo.updatedAt = Date.now();
-    await todo.save();
-
-    res.status(200).json(todo);
-  } catch (err) {
-    res.status(400).json({ error: "Validation error", details: err.message });
   }
 });
 
