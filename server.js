@@ -104,10 +104,54 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
+// General todo APIs
+app.get("/api/todos/all", authenticate, async (req, res) => {
+  try {
+    const todos = await Todo.find({ userId: req.user.id });
+    res.status(200).json(todos);
+  } catch (err) {
+    res.status(500).json({ error: "Server error", details: err.message });
+  }
+});
+
 app.get("/api/todos", authenticate, async (req, res) => {
   try {
     const todos = await Todo.find({ userId: req.user.id }).sort({
       createdAt: -1,
+    });
+    res.status(200).json(todos);
+  } catch (err) {
+    res.status(500).json({ error: "Server error", details: err.message });
+  }
+});
+
+app.get("/api/todos/today", authenticate, async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const tomorrow = new Date();
+    tomorrow.setHours(24, 0, 0, 0);
+
+    const todos = await Todo.find({
+      userId: req.user.id,
+      dueDate: { $gte: today, $lt: tomorrow },
+    });
+    res.status(200).json(todos);
+  } catch (err) {
+    res.status(500).json({ error: "Server error", details: err.message });
+  }
+});
+
+app.get("/api/todos/overdue", authenticate, async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const todos = await Todo.find({
+      userId: req.user.id,
+      dueDate: { $lt: today },
+      completed: false,
     });
     res.status(200).json(todos);
   } catch (err) {
@@ -170,7 +214,6 @@ app.delete("/api/todos/:id", authenticate, async (req, res) => {
   }
 });
 
-// Get todos with specified priorities
 app.get("/api/todos/filter", authenticate, async (req, res) => {
   try {
     const { priorities } = req.query;
