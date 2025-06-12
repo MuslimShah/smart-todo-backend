@@ -34,7 +34,7 @@ const userSchema = new mongoose.Schema({
 
 const todoSchema = new mongoose.Schema({
   id: { type: String, default: uuidv4 },
-  userId: { type: String, required: true }, // Link task to user
+  userId: { type: String, required: true },
   title: { type: String, required: true },
   description: { type: String },
   completed: { type: Boolean, default: false },
@@ -104,7 +104,6 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
-// Protect routes with `authenticate` middleware
 app.get("/api/todos", authenticate, async (req, res) => {
   try {
     const todos = await Todo.find({ userId: req.user.id }).sort({
@@ -122,7 +121,7 @@ app.post("/api/todos", authenticate, async (req, res) => {
       req.body;
 
     const newTodo = new Todo({
-      userId: req.user.id, // Assign task to authenticated user
+      userId: req.user.id,
       title,
       description,
       priority,
@@ -138,13 +137,12 @@ app.post("/api/todos", authenticate, async (req, res) => {
     res.status(400).json({ error: "Validation error", details: err.message });
   }
 });
-//testing
 
 app.put("/api/todos/:id", authenticate, async (req, res) => {
   try {
     const updatedData = { ...req.body, updatedAt: Date.now() };
     const updatedTodo = await Todo.findOneAndUpdate(
-      { id: req.params.id, userId: req.user.id }, // Ensure task belongs to user
+      { id: req.params.id, userId: req.user.id },
       updatedData,
       { new: true }
     );
@@ -161,12 +159,29 @@ app.delete("/api/todos/:id", authenticate, async (req, res) => {
   try {
     const deletedTodo = await Todo.findOneAndDelete({
       id: req.params.id,
-      userId: req.user.id, // Ensure task belongs to user
+      userId: req.user.id,
     });
 
     if (!deletedTodo) return res.status(404).json({ error: "Todo not found" });
 
     res.status(200).json({ message: "Todo deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ error: "Server error", details: err.message });
+  }
+});
+
+// Get todos with specified priorities
+app.get("/api/todos/filter", authenticate, async (req, res) => {
+  try {
+    const { priorities } = req.query;
+    const priorityArray = priorities ? priorities.split(",") : [];
+
+    const filteredTodos = await Todo.find({
+      userId: req.user.id,
+      priority: { $in: priorityArray },
+    }).sort({ createdAt: -1 });
+
+    res.status(200).json(filteredTodos);
   } catch (err) {
     res.status(500).json({ error: "Server error", details: err.message });
   }
