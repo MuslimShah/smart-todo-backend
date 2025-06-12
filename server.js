@@ -17,7 +17,7 @@ app.use(express.json());
 app.use(cors());
 app.use(morgan("dev"));
 
-// Database connection
+// Database connection.....
 mongoose
   .connect(process.env.MONGODB_URI, {
     useNewUrlParser: true,
